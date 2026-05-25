@@ -18,7 +18,6 @@ load_dotenv()
 DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')
 ANTHROPIC_API_KEY = os.getenv('ANTHROPIC_API_KEY')
 YOUR_DISCORD_ID = int(os.getenv('YOUR_DISCORD_ID', '386704722872238090'))
-SUGGESTIONS_CHANNEL = os.getenv('SUGGESTIONS_CHANNEL', 'suggestions')
 
 TZ_UTC8 = timezone(timedelta(hours=8))
 
@@ -33,9 +32,25 @@ sent_today = {"daily": None, "weekly": None, "suggestions": None}
 
 SUBSCRIBERS_FILE = "subscribers.json"
 CHANNELS_FILE = "channels.json"
+SUGGESTION_CHANNELS_FILE = "suggestion_channels.json"
 
 
 # --- Persistence ---
+
+def load_suggestion_channels() -> list:
+    try:
+        if os.path.exists(SUGGESTION_CHANNELS_FILE):
+            with open(SUGGESTION_CHANNELS_FILE) as f:
+                return json.load(f)
+    except Exception:
+        pass
+    return ["suggestions"]  # default
+
+
+def save_suggestion_channels(channels: list):
+    with open(SUGGESTION_CHANNELS_FILE, 'w') as f:
+        json.dump(channels, f)
+
 
 def load_subscribers() -> set:
     try:
@@ -71,6 +86,7 @@ def save_monitored_channels(channels: list):
 
 subscribers = load_subscribers()
 monitored_channels = load_monitored_channels()
+suggestion_channels = load_suggestion_channels()
 
 
 # --- Message Collection ---
@@ -110,7 +126,7 @@ async def collect_top_suggestions(days_back: int = 7):
 
     for guild in client.guilds:
         for channel in guild.text_channels:
-            if channel.name != SUGGESTIONS_CHANNEL:
+            if channel.name not in suggestion_channels:
                 continue
             try:
                 async for msg in channel.history(after=cutoff, limit=1000):
@@ -119,13 +135,14 @@ async def collect_top_suggestions(days_back: int = 7):
                     total_reactions = sum(r.count for r in msg.reactions)
                     results.append({
                         'server': guild.name,
+                        'channel': channel.name,
                         'author': msg.author.display_name,
                         'content': msg.content[:400],
                         'reactions': total_reactions,
                         'url': msg.jump_url,
                     })
             except discord.Forbidden:
-                logger.warning(f"No access to #{SUGGESTIONS_CHANNEL} in {guild.name}")
+                logger.warning(f"No access to #{channel.name} in {guild.name}")
             except Exception as e:
                 logger.error(f"Error collecting suggestions from {guild.name}: {e}")
 
@@ -306,9 +323,10 @@ async def do_suggestions_report():
 
     try:
         top = await collect_top_suggestions(days_back=7)
+        ch_list = ", ".join([f"#{c}" for c in suggestion_channels])
         if not top:
             await broadcast(
-                f"No suggestions found in #{SUGGESTIONS_CHANNEL} this week.",
+                f"No suggestions found in {ch_list} this week.",
                 f"💡 **Top Suggestions — {date_range}**"
             )
             return
@@ -316,7 +334,7 @@ async def do_suggestions_report():
         lines = []
         for i, s in enumerate(top):
             lines.append(
-                f"**#{i+1}** 👍 {s['reactions']} reactions — @{s['author']} ({s['server']})\n"
+                f"**#{i+1}** 👍 {s['reactions']} reactions — @{s['author']} ({s['server']} / #{s['channel']})\n"
                 f"> {s['content']}\n"
                 f"🔗 {s['url']}\n"
             )
@@ -349,6 +367,10 @@ async def handle_dm_command(message):
                 "`!addchannel general` — add channel to monitor\n"
                 "`!removechannel general` — remove channel\n"
                 "`!channels` — list monitored channels\n\n"
+                "**Suggestion channels:**\n"
+                "`!addsuggestions feedback` — add a suggestions channel\n"
+                "`!removesuggestions feedback` — remove a suggestions channel\n"
+                "`!suggestions-list` — list all suggestions channels\n\n"
                 "**Subscribers:**\n"
                 "`!addsubscriber USER_ID` — add a subscriber\n"
                 "`!removesubscriber USER_ID` — remove a subscriber\n"
@@ -379,6 +401,7 @@ async def handle_dm_command(message):
 
     elif cmd == "!status":
         ch_status = ", ".join([f"#{c}" for c in monitored_channels]) if monitored_channels else "All channels"
+        sg_status = ", ".join([f"#{c}" for c in suggestion_channels])
         servers = ", ".join([g.name for g in client.guilds])
         now = datetime.now(TZ_UTC8).strftime("%Y-%m-%d %H:%M UTC+8")
         await message.channel.send(
@@ -386,9 +409,37 @@ async def handle_dm_command(message):
             f"Time: {now}\n"
             f"Servers: {servers}\n"
             f"Monitoring: {ch_status}\n"
-            f"Suggestions channel: #{SUGGESTIONS_CHANNEL}\n"
+            f"Suggestion channels: {sg_status}\n"
             f"Subscribers: {len(subscribers)}"
         )
+
+    elif cmd.startswith("!addsuggestions "):
+        name = raw[len("!addsuggestions "):].strip().lstrip("#")
+        if name not in suggestion_channels:
+            suggestion_channels.append(name)
+            save_suggestion_channels(suggestion_channels)
+            await message.channel.send(
+                f"✅ Added: #{name}\n"
+                f"All suggestion channels: {', '.join(['#'+c for c in suggestion_channels])}"
+            )
+        else:
+            await message.channel.send(f"#{name} is already in the list.")
+
+    elif cmd.startswith("!removesuggestions "):
+        name = raw[len("!removesuggestions "):].strip().lstrip("#")
+        if name in suggestion_channels:
+            suggestion_channels.remove(name)
+            save_suggestion_channels(suggestion_channels)
+            await message.channel.send(
+                f"✅ Removed: #{name}\n"
+                f"Remaining: {', '.join(['#'+c for c in suggestion_channels]) or 'none'}"
+            )
+        else:
+            await message.channel.send(f"#{name} was not in the list.")
+
+    elif cmd == "!suggestions-list":
+        sg_status = ", ".join([f"#{c}" for c in suggestion_channels]) or "none"
+        await message.channel.send(f"💡 Suggestion channels: {sg_status}")
 
     elif cmd.startswith("!addchannel "):
         name = raw[len("!addchannel "):].strip().lstrip("#")
