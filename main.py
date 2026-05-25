@@ -1,5 +1,5 @@
 import discord
-from openai import OpenAI
+from openai import AsyncOpenAI
 import asyncio
 import os
 import json
@@ -28,7 +28,7 @@ intents.message_content = True
 intents.guilds = True
 
 client = discord.Client(intents=intents)
-llm_client = OpenAI(api_key=LLM_API_KEY, base_url=LLM_BASE_URL, timeout=180.0)
+llm_client = AsyncOpenAI(api_key=LLM_API_KEY, base_url=LLM_BASE_URL, timeout=120.0)
 
 sent_today = {"daily": None, "weekly": None, "suggestions": None}
 
@@ -239,31 +239,17 @@ How did sentiment shift through the week? Any notable spikes or drops?
 Messages from this week:
 {messages_text}"""
 
-    def _call():
-        chunks = []
-        with llm_client.chat.completions.create(
-            model=LLM_MODEL,
-            max_tokens=800,
-            stream=True,
-            messages=[
-                {"role": "system", "content": system},
-                {"role": "user", "content": prompt}
-            ]
-        ) as stream:
-            for chunk in stream:
-                delta = chunk.choices[0].delta.content
-                if delta:
-                    chunks.append(delta)
-        return "".join(chunks)
-
     for attempt in range(3):
         try:
-            return await asyncio.wait_for(asyncio.to_thread(_call), timeout=120)
-        except asyncio.TimeoutError:
-            if attempt == 2:
-                raise Exception("LLM request timed out after 120s")
-            logger.warning(f"LLM timeout (attempt {attempt+1}/3), retrying...")
-            await asyncio.sleep(5)
+            response = await llm_client.chat.completions.create(
+                model=LLM_MODEL,
+                max_tokens=800,
+                messages=[
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": prompt}
+                ]
+            )
+            return response.choices[0].message.content
         except Exception as e:
             if attempt == 2:
                 raise
@@ -412,7 +398,19 @@ async def handle_dm_command(message):
         await message.channel.send("❌ You don't have permission to use this bot.")
         return
 
-    if cmd == "!daily":
+    if cmd == "!test":
+        await message.channel.send("Testing LLM connection...")
+        try:
+            response = await llm_client.chat.completions.create(
+                model=LLM_MODEL,
+                max_tokens=20,
+                messages=[{"role": "user", "content": "Reply with just: ok"}]
+            )
+            await message.channel.send(f"✅ LLM works: `{response.choices[0].message.content.strip()}`")
+        except Exception as e:
+            await message.channel.send(f"❌ LLM failed: {str(e)}")
+
+    elif cmd == "!daily":
         await message.channel.send("Generating yesterday's daily report now...")
         await do_daily_report()
 
