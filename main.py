@@ -1,5 +1,5 @@
 import discord
-import anthropic
+from openai import OpenAI
 import asyncio
 import os
 import json
@@ -16,7 +16,9 @@ logger = logging.getLogger(__name__)
 load_dotenv()
 
 DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')
-ANTHROPIC_API_KEY = os.getenv('ANTHROPIC_API_KEY')
+LLM_API_KEY = os.getenv('LLM_API_KEY')
+LLM_BASE_URL = os.getenv('LLM_BASE_URL', 'https://llm-proxy.lilithgames.com/v1')
+LLM_MODEL = os.getenv('LLM_MODEL', 'claude-opus-4-7')
 YOUR_DISCORD_ID = int(os.getenv('YOUR_DISCORD_ID', '386704722872238090'))
 
 TZ_UTC8 = timezone(timedelta(hours=8))
@@ -26,7 +28,7 @@ intents.message_content = True
 intents.guilds = True
 
 client = discord.Client(intents=intents)
-anthropic_client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+llm_client = OpenAI(api_key=LLM_API_KEY, base_url=LLM_BASE_URL)
 
 sent_today = {"daily": None, "weekly": None, "suggestions": None}
 
@@ -237,13 +239,15 @@ How did sentiment shift through the week? Any notable spikes or drops?
 Messages from this week:
 {messages_text}"""
 
-    response = anthropic_client.messages.create(
-        model="claude-opus-4-5",
+    response = llm_client.chat.completions.create(
+        model=LLM_MODEL,
         max_tokens=2500,
-        system=system,
-        messages=[{"role": "user", "content": prompt}]
+        messages=[
+            {"role": "system", "content": system},
+            {"role": "user", "content": prompt}
+        ]
     )
-    return response.content[0].text
+    return response.choices[0].message.content
 
 
 # --- Sending ---
