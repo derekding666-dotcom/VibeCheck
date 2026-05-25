@@ -239,17 +239,19 @@ How did sentiment shift through the week? Any notable spikes or drops?
 Messages from this week:
 {messages_text}"""
 
+    def _call():
+        return llm_client.chat.completions.create(
+            model=LLM_MODEL,
+            max_tokens=2500,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": prompt}
+            ]
+        ).choices[0].message.content
+
     for attempt in range(3):
         try:
-            response = llm_client.chat.completions.create(
-                model=LLM_MODEL,
-                max_tokens=2500,
-                messages=[
-                    {"role": "system", "content": system},
-                    {"role": "user", "content": prompt}
-                ]
-            )
-            return response.choices[0].message.content
+            return await asyncio.to_thread(_call)
         except Exception as e:
             if attempt == 2:
                 raise
