@@ -107,7 +107,7 @@ async def collect_messages(hours_back: int, max_per_channel: int = 500):
                 async for msg in channel.history(after=cutoff, limit=max_per_channel):
                     if not msg.author.bot and msg.content.strip():
                         messages.append(
-                            f"[#{channel.name}] {msg.author.display_name}: {msg.content[:300]}"
+                            f"[#{channel.name}] {msg.author.display_name}: {msg.content[:100]}"
                         )
                 if messages:
                     channels_data[channel.name] = messages
@@ -251,7 +251,12 @@ Messages from this week:
 
     for attempt in range(3):
         try:
-            return await asyncio.to_thread(_call)
+            return await asyncio.wait_for(asyncio.to_thread(_call), timeout=120)
+        except asyncio.TimeoutError:
+            if attempt == 2:
+                raise Exception("LLM request timed out after 120s")
+            logger.warning(f"LLM timeout (attempt {attempt+1}/3), retrying...")
+            await asyncio.sleep(5)
         except Exception as e:
             if attempt == 2:
                 raise
@@ -292,7 +297,7 @@ async def do_daily_report():
             await broadcast("No player messages found in the past 24 hours.", f"📊 **Daily Report — {date_str}**")
             return
 
-        text, count = format_for_claude(data)
+        text, count = format_for_claude(data, max_messages=150)
         logger.info(f"Collected {count} messages for daily report")
         report = await call_claude(text, "daily", date_str)
         await broadcast(report, f"📊 **Daily Community Report — {date_str}** ({count} messages analyzed)")
@@ -316,7 +321,7 @@ async def do_weekly_report():
             await broadcast("No player messages found this week.", f"📈 **Weekly Report — {date_range}**")
             return
 
-        text, count = format_for_claude(data, max_messages=5000)
+        text, count = format_for_claude(data, max_messages=300)
         logger.info(f"Collected {count} messages for weekly report")
         report = await call_claude(text, "weekly", date_range)
         await broadcast(report, f"📈 **Weekly Community Report — {date_range}** ({count} messages analyzed)")
