@@ -28,7 +28,7 @@ intents.message_content = True
 intents.guilds = True
 
 client = discord.Client(intents=intents)
-llm_client = OpenAI(api_key=LLM_API_KEY, base_url=LLM_BASE_URL)
+llm_client = OpenAI(api_key=LLM_API_KEY, base_url=LLM_BASE_URL, timeout=180.0)
 
 sent_today = {"daily": None, "weekly": None, "suggestions": None}
 
@@ -172,7 +172,7 @@ def format_for_claude(messages_data: dict, max_messages: int = 4000):
     return "\n".join(lines), total
 
 
-def call_claude(messages_text: str, report_type: str, date_range: str) -> str:
+async def call_claude(messages_text: str, report_type: str, date_range: str) -> str:
     if report_type == "daily":
         system = "You are a professional community analytics assistant. Write concise, actionable daily reports for gaming Discord community managers."
         prompt = f"""Analyze these Discord gaming community messages and write a daily report.
@@ -239,15 +239,22 @@ How did sentiment shift through the week? Any notable spikes or drops?
 Messages from this week:
 {messages_text}"""
 
-    response = llm_client.chat.completions.create(
-        model=LLM_MODEL,
-        max_tokens=2500,
-        messages=[
-            {"role": "system", "content": system},
-            {"role": "user", "content": prompt}
-        ]
-    )
-    return response.choices[0].message.content
+    for attempt in range(3):
+        try:
+            response = llm_client.chat.completions.create(
+                model=LLM_MODEL,
+                max_tokens=2500,
+                messages=[
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": prompt}
+                ]
+            )
+            return response.choices[0].message.content
+        except Exception as e:
+            if attempt == 2:
+                raise
+            logger.warning(f"LLM request failed (attempt {attempt+1}/3): {e}, retrying...")
+            await asyncio.sleep(5)
 
 
 # --- Sending ---
@@ -285,7 +292,7 @@ async def do_daily_report():
 
         text, count = format_for_claude(data)
         logger.info(f"Collected {count} messages for daily report")
-        report = call_claude(text, "daily", date_str)
+        report = await call_claude(text, "daily", date_str)
         await broadcast(report, f"📊 **Daily Community Report — {date_str}** ({count} messages analyzed)")
 
     except Exception as e:
@@ -309,7 +316,7 @@ async def do_weekly_report():
 
         text, count = format_for_claude(data, max_messages=5000)
         logger.info(f"Collected {count} messages for weekly report")
-        report = call_claude(text, "weekly", date_range)
+        report = await call_claude(text, "weekly", date_range)
         await broadcast(report, f"📈 **Weekly Community Report — {date_range}** ({count} messages analyzed)")
 
     except Exception as e:
