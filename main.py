@@ -240,14 +240,21 @@ Messages from this week:
 {messages_text}"""
 
     def _call():
-        return llm_client.chat.completions.create(
+        chunks = []
+        with llm_client.chat.completions.create(
             model=LLM_MODEL,
-            max_tokens=2500,
+            max_tokens=800,
+            stream=True,
             messages=[
                 {"role": "system", "content": system},
                 {"role": "user", "content": prompt}
             ]
-        ).choices[0].message.content
+        ) as stream:
+            for chunk in stream:
+                delta = chunk.choices[0].delta.content
+                if delta:
+                    chunks.append(delta)
+        return "".join(chunks)
 
     for attempt in range(3):
         try:
